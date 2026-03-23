@@ -10,7 +10,7 @@ init:
   image:
     tag: v1.21.1
     domain: amazonaws.com
-    region: us-west-2
+    region: ${AWS_REGION}
     endpoint: ecr
     account: "602401143452"
     pullPolicy: Always
@@ -20,6 +20,7 @@ init:
   env:
     DISABLE_TCP_EARLY_DEMUX: "false"
     ENABLE_IPv6: "false"
+    HOST_CNI_BIN_PATH: "/host/var/lib/cni/bin"
   securityContext:
     privileged: true
   resources: {}
@@ -29,7 +30,7 @@ nodeAgent:
   image:
     tag: v1.3.1
     domain: amazonaws.com
-    region: us-west-2
+    region: ${AWS_REGION}
     endpoint: ecr
     account: "602401143452"
     pullPolicy: Always
@@ -53,7 +54,7 @@ nodeAgent:
 image:
   tag: v1.21.1
   domain: amazonaws.com
-  region: us-west-2
+  region: ${AWS_REGION}
   endpoint: ecr
   account: "602401143452"
   pullPolicy: Always
@@ -91,6 +92,8 @@ env:
   ENABLE_IMDS_ONLY_MODE: "false"
   ENABLE_MULTI_NIC: "false"
   POD_SECURITY_GROUP_ENFORCING_MODE: "standard"
+  HOST_CNI_BIN_PATH: "/host/var/lib/cni/bin"
+  HOST_CNI_CONFDIR_PATH: "/host/etc/kubernetes/cni/net.d"
 
 # Add env from configMap or from secrets
 # - name: ENV_VAR1
@@ -157,7 +160,7 @@ serviceAccount:
   # If not set and create is true, a name is generated using the fullname template
   name:
   annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::<AWS_ACCOUNT_ID>:<IAM_ROLE_NAME>
+    eks.amazonaws.com/role-arn: arn:aws:iam::${AWS_ACCOUNT_ID}:role/${IAM_ROLE_NAME}
 
 livenessProbe:
   exec:
@@ -249,3 +252,17 @@ podMonitor:
   scrapeTimeout: 30s
   # relabelings to apply to the podMonitor
   relabelings: []
+
+extraVolumes:
+  - name: rosa-cni-bin-dir
+    hostPath:
+      path: /var/lib/cni/bin
+  - name: rosa-cni-net-dir
+    hostPath:
+      path: /etc/kubernetes/cni/net.d
+
+extraVolumeMounts:
+  - name: rosa-cni-bin-dir
+    mountPath: /host/var/lib/cni/bin
+  - name: rosa-cni-net-dir
+    mountPath: /host/etc/kubernetes/cni/net.d
