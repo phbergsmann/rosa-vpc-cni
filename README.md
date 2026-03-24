@@ -11,9 +11,10 @@ This guide covers installing the AWS VPC CNI on a ROSA Hosted Control Plane clus
 
 ## Environment Variables
 
-Set the cluster name and VPC CIDR (used throughout this guide):
+Set the cluster name, AWS region, and VPC CIDR (used throughout this guide):
 ```bash
 export CLUSTER_NAME=poc-cni
+export AWS_REGION=eu-central-1
 export VPC_CIDR=10.0.0.0/16
 ```
 
@@ -28,7 +29,7 @@ Then create the VPC:
 ```bash
 cd terraform-vpc
 terraform init
-terraform apply -var region=eu-central-1 -var cluster_name=$CLUSTER_NAME -var vpc_cidr=$VPC_CIDR -var subnet_cidr_prefix=21
+terraform apply -var region=$AWS_REGION -var cluster_name=$CLUSTER_NAME -var vpc_cidr=$VPC_CIDR -var subnet_cidr_prefix=21
 export SUBNETS=$(terraform output -raw cluster-subnets-string)
 # Get VPC ID from the first subnet
 export VPC_ID=$(aws ec2 describe-subnets --subnet-ids $(echo $SUBNETS | cut -d',' -f1) \
@@ -51,6 +52,7 @@ rosa create cluster --sts \
   --oidc-config-id $OIDC_CONFIG_ID \
   --operator-roles-prefix $CLUSTER_NAME \
   --hosted-cp \
+  --region $AWS_REGION \
   --subnet-ids=$SUBNETS \
   --no-cni \
   -c $CLUSTER_NAME \
@@ -72,22 +74,23 @@ Get the OIDC provider ID:
 ```bash
 export OIDC_PROVIDER=$(rosa describe cluster -c $CLUSTER_NAME -o json | jq -r '.aws.sts.oidc_endpoint_url' | sed 's|https://||')
 export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+export IAM_ROLE_NAME=${CLUSTER_NAME}-vpc
 ```
 
-Update `network-role.json` with your OIDC provider, then create the role:
+Update `network-role.template.json` with your OIDC provider, then create the role:
 ```bash
-# Create the trust policy (see network-role.json)
-envsubst < network-role.json > network-role-filled.json
+# Create the trust policy (see network-role.template.json)
+envsubst < network-role.template.json > network-role.json
 
 # Create the IAM role
 aws iam create-role \
-  --role-name "${CLUSTER_NAME}-vpc" \
-  --assume-role-policy-document file://network-role-filled.json \
+  --role-name "$IAM_ROLE_NAME" \
+  --assume-role-policy-document file://network-role.json \
   --description "IAM Role for AWS VPC CNI on ROSA"
 
 # Attach the AWS managed EKS CNI policy
 aws iam attach-role-policy \
-  --role-name "${CLUSTER_NAME}-vpc" \
+  --role-name "$IAM_ROLE_NAME" \
   --policy-arn arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
 ```
 
@@ -102,54 +105,54 @@ oc adm policy add-scc-to-user hostaccess -z aws-node -n kube-system
 oc adm policy add-scc-to-user privileged -z aws-node -n kube-system
 ```
 
-## 5. Update values.yaml
+## 5. Enable IP Forwarding via Tuning Config (REQUIRED)
 
-Edit `values.yaml` and set:
-- `serviceAccount.annotations."eks.amazonaws.com/role-arn"` to your IAM role ARN
-- `init.image.region` and `image.region` to your AWS region
+IP forwarding is disabled by default on RHCOS nodes. On ROSA HCP, the Node Tuning Operator is managed by the hosted control plane — custom `Tuned` CRs applied directly via `oc apply` are reconciled away. Use the `rosa` CLI to create a tuning config instead:
+
+```bash
+rosa create tuning-config -c $CLUSTER_NAME --name ip-forward --spec-path ip-forward-spec.json
+rosa edit machinepool -c $CLUSTER_NAME workers --tuning-configs ip-forward
+```
+
+This applies the `ip-forward-spec.json` tuning profile (included in this repo) to the `workers` machinepool. The profile inherits all settings from the default `openshift-node` profile and adds `net.ipv4.ip_forward=1`. New nodes joining the machinepool will automatically receive this setting.
+
+Verify IP forwarding is enabled on the nodes:
+```bash
+oc debug node/$(oc get nodes -o jsonpath='{.items[0].metadata.name}') -- chroot /host sysctl net.ipv4.ip_forward
+```
 
 ## 6. Install AWS VPC CNI Helm Chart
 
+Generate `values.yaml` from the template and install:
+
 ```bash
-helm repo add eks https://aws.github.io/eks-charts
-helm repo update
+envsubst < values.template.yaml > values.yaml
+
+git clone --branch init-container-extra-volume-mounts \
+  https://github.com/phbergsmann/amazon-vpc-cni-k8s.git amazon-vpc-cni-k8s
 
 helm install aws-vpc-cni \
   --namespace kube-system \
-  eks/aws-vpc-cni \
+  ./amazon-vpc-cni-k8s/charts/aws-vpc-cni \
   --values values.yaml
 ```
 
-## 7. Patch DaemonSet for ROSA/CRI-O Paths (REQUIRED)
+The `values.template.yaml` contains `${AWS_REGION}`, `${AWS_ACCOUNT_ID}`, and `${IAM_ROLE_NAME}` placeholders. `envsubst` populates:
+- `serviceAccount.annotations."eks.amazonaws.com/role-arn"` with the IAM role ARN
+- `init.image.region`, `nodeAgent.image.region`, and `image.region` with your AWS region
 
-ROSA uses CRI-O which looks for CNI binaries and configs in different paths than containerd-based EKS:
-
-```bash
-# Patch the DaemonSet to use ROSA-compatible paths
-oc patch daemonset aws-node -n kube-system --type='json' -p='[
-  {"op": "replace", "path": "/spec/template/spec/volumes/1/hostPath/path", "value": "/var/lib/cni/bin"},
-  {"op": "replace", "path": "/spec/template/spec/volumes/2/hostPath/path", "value": "/etc/kubernetes/cni/net.d"}
-]'
-```
+ROSA uses CRI-O which looks for CNI binaries and configs in different paths than containerd-based EKS. The `values.template.yaml` handles this via:
+- `HOST_CNI_BIN_PATH` / `HOST_CNI_CONFDIR_PATH` env vars (in both `init.env` and `env`) — tells the init and main containers where to install/find binaries and config
+- `extraVolumeMounts` / `extraVolumes` — mounts the ROSA host paths into both the init and main containers
 
 | Path Type | EKS Default | ROSA/CRI-O Path |
-|-----------|-------------|-----------------|
+|-----------|-------------|------------------|
 | CNI Binaries | `/opt/cni/bin` | `/var/lib/cni/bin` |
 | CNI Config | `/etc/cni/net.d` | `/etc/kubernetes/cni/net.d` |
 
-## 8. Enable IP Forwarding (REQUIRED for each node)
+> **Note**: This requires a Helm chart where `extraVolumeMounts` is also rendered in the init container. See the [chart changes](#chart-changes) section below.
 
-IP forwarding is disabled by default on RHCOS nodes. The VPC CNI does NOT automatically enable it on ROSA. Enable it on each node:
-
-```bash
-# For each node in the cluster
-for NODE in $(oc get nodes -o jsonpath='{.items[*].metadata.name}'); do
-  echo "Enabling IP forwarding on $NODE..."
-  oc debug node/$NODE -- chroot /host sysctl -w net.ipv4.ip_forward=1
-done
-```
-
-## 9. Verify Installation
+## 7. Verify Installation
 
 Wait for aws-node pods to be running:
 ```bash
@@ -263,7 +266,8 @@ Unlike EKS, the VPC CNI on ROSA does **NOT** automatically configure:
 
 | Setting | Required Action |
 |---------|----------------|
-| IP Forwarding | Manually enable `net.ipv4.ip_forward=1` on each node (Step 8) |
+| IP Forwarding | Create a tuning config via `rosa` CLI (Step 5) |
+| CNI Paths | Set `HOST_CNI_BIN_PATH` / `HOST_CNI_CONFDIR_PATH` env vars + extra volumes in Helm values (Step 6) |
 
 > **Note**: Source/destination check on ENIs does NOT need to be disabled - tested and verified to work with the default setting.
 
@@ -273,6 +277,15 @@ When properly configured with IAM permissions, the VPC CNI will:
 - ✅ Manage secondary ENIs for additional pod IPs
 - ✅ Assign/unassign secondary private IPs
 - ✅ Install CNI binaries and config files
+
+## Chart Changes
+
+The upstream `eks/aws-vpc-cni` Helm chart does not render `extraVolumeMounts` in the init container. The [`feature/init-container-extra-volume-mounts`](https://github.com/phbergsmann/amazon-vpc-cni-k8s/tree/feature/init-container-extra-volume-mounts) branch adds this support:
+
+**`templates/daemonset.yaml`**:
+- Init container now also renders `{{ .Values.extraVolumeMounts }}` (previously only the main container did)
+
+This change is backwards-compatible — existing charts that don't set `extraVolumeMounts` are unaffected.
 
 ## Troubleshooting
 
@@ -291,6 +304,6 @@ oc logs -n kube-system -l app.kubernetes.io/name=aws-node --all-containers -f
 | Issue | Solution |
 |-------|----------|
 | `failed to assign an IP address` | Check IAM permissions - CNI may not be able to create secondary ENIs |
-| Nodes stuck in `NotReady` | Verify DaemonSet path patches were applied |
-| Pods can't communicate (100% packet loss) | Enable IP forwarding on nodes (Step 8) |
-| New node pods can't communicate | Run Step 8 again for the new node |
+| Nodes stuck in `NotReady` | Verify `HOST_CNI_BIN_PATH` / `HOST_CNI_CONFDIR_PATH` and extra volume mounts are set (Step 6) |
+| Pods can't communicate (100% packet loss) | Verify the `ip-forward` tuning config is applied (Step 5) |
+| New node pods can't communicate | Verify the machinepool has the tuning config: `rosa list tuning-configs -c $CLUSTER_NAME` |

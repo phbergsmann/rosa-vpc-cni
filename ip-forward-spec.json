@@ -1,0 +1,14 @@
+{
+  "profile": [
+    {
+      "name": "ip-forward-vpc-cni",
+      "data": "[main]\nsummary=Enable IP forwarding for AWS VPC CNI\ninclude=openshift-node\n[sysctl]\nnet.ipv4.ip_forward=1\n"
+    }
+  ],
+  "recommend": [
+    {
+      "profile": "ip-forward-vpc-cni",
+      "priority": 5
+    }
+  ]
+}
