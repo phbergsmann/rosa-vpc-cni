@@ -1,0 +1,75 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: vm-test-vpcni
+  namespace: vpcni-virt-test
+  labels:
+    app: vm-test-vpcni
+spec:
+  dataVolumeTemplates:
+    - apiVersion: cdi.kubevirt.io/v1beta1
+      kind: DataVolumeTemplate
+      metadata:
+        name: vm-test-vpcni
+      spec:
+        sourceRef:
+          kind: DataSource
+          name: fedora
+          namespace: openshift-virtualization-os-images
+        storage:
+          resources:
+            requests:
+              storage: 30Gi
+          storageClassName: ebs-sc
+  runStrategy: Always
+  template:
+    metadata:
+      labels:
+        kubevirt.io/domain: vm-test-vpcni
+        app: vm-test-vpcni
+    spec:
+      domain:
+        cpu:
+          cores: 1
+          sockets: 1
+          threads: 1
+        devices:
+          disks:
+            - disk:
+                bus: virtio
+              name: rootdisk
+            - disk:
+                bus: virtio
+              name: cloudinitdisk
+          interfaces:
+            - masquerade: {}
+              name: default
+          networkInterfaceMultiqueue: true
+          rng: {}
+        machine:
+          type: pc-q35-rhel8.6.0
+        resources:
+          requests:
+            memory: 2Gi
+      evictionStrategy: LiveMigrate
+      networks:
+        - name: default
+          pod: {}
+      terminationGracePeriodSeconds: 180
+      volumes:
+        - dataVolume:
+            name: vm-test-vpcni
+          name: rootdisk
+        - cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              user: cloud-user
+              password: redhat123
+              chpasswd: { expire: False }
+              packages:
+                - httpd
+              runcmd:
+                - systemctl enable httpd
+                - systemctl start httpd
+                - echo 'Hello from VPC CNI Virt Test' > /var/www/html/index.html
+          name: cloudinitdisk
