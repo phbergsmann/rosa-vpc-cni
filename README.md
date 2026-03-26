@@ -168,16 +168,21 @@ oc get nodes
 
 ### Pod-to-Pod Connectivity
 
-Create test pods and verify connectivity:
+Create test pods on different nodes and verify connectivity:
 ```bash
-# Create test pods
-oc run test-1 --image=nicolaka/netshoot -- sleep 3600
-oc run test-2 --image=nicolaka/netshoot -- sleep 3600
+# Get node names
+NODES=($(oc get nodes -o jsonpath='{.items[*].metadata.name}'))
+
+# Create test pods on separate nodes
+oc run test-1 --image=nicolaka/netshoot \
+  --overrides='{"spec":{"nodeName":"'${NODES[1]}'"}}' -- sleep 3600
+oc run test-2 --image=nicolaka/netshoot \
+  --overrides='{"spec":{"nodeName":"'${NODES[2]}'"}}' -- sleep 3600
 
 # Wait for pods
 oc get pods -w
 
-# Check pods have VPC IPs (10.0.x.x)
+# Verify pods are on different nodes and have VPC IPs (10.0.x.x)
 oc get pods -o wide
 
 # Test connectivity (replace <test-2-ip> with actual IP)
