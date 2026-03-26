@@ -17,7 +17,14 @@ rosa create machine-pool -c $CLUSTER_NAME --name bm --replicas=1 --instance-type
 
 ## 1. Fix Security Group for VPC CNI
 
-The default ROSA security group only allows overlay tunnel traffic (Geneve/VXLAN) between nodes. With VPC CNI, pod-to-pod traffic flows directly between ENIs and requires explicit TCP/UDP rules. Without this fix, Konnectivity agents cannot reach webhook pods cross-node, causing all OpenShift Virtualization webhook calls to fail.
+The default ROSA security group only allows overlay tunnel traffic (Geneve/VXLAN) between nodes. With VPC CNI, pod-to-pod traffic flows directly between ENIs and requires explicit TCP rules. Without this fix, Konnectivity agents cannot reach webhook pods cross-node, causing all OpenShift Virtualization webhook calls to fail with `http: server gave HTTP response to HTTPS client`.
+
+The following ports are used by OpenShift Virtualization webhook services:
+
+| Port | Service |
+|------|---------|
+| 4343 | hco-webhook |
+| 8443 | virt-api, cdi-apiserver, virt-template-validator, cdi-uploadproxy |
 
 ```bash
 # Get the default ROSA security group
@@ -26,12 +33,12 @@ SG_ID=$(aws ec2 describe-instances \
   --query 'Reservations[0].Instances[0].SecurityGroups[0].GroupId' \
   --output text --region $AWS_REGION)
 
-# Allow all TCP traffic within the security group (required for VPC CNI)
+# Allow OpenShift Virt webhook ports within the security group (required for VPC CNI)
 aws ec2 authorize-security-group-ingress \
   --group-id $SG_ID \
-  --protocol tcp \
-  --port 0-65535 \
-  --source-group $SG_ID \
+  --ip-permissions \
+    "IpProtocol=tcp,FromPort=4343,ToPort=4343,UserIdGroupPairs=[{GroupId=$SG_ID,Description='HCO webhook'}]" \
+    "IpProtocol=tcp,FromPort=8443,ToPort=8443,UserIdGroupPairs=[{GroupId=$SG_ID,Description='virt-api, cdi-apiserver, virt-template-validator'}]" \
   --region $AWS_REGION
 ```
 
