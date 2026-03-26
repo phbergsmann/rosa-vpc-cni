@@ -21,7 +21,7 @@ init:
     DISABLE_TCP_EARLY_DEMUX: "false"
     ENABLE_IPv6: "false"
     HOST_CNI_BIN_PATH: /host/var/lib/cni/bin
-    HOST_CNI_CONFDIR_PATH: /host/etc/kubernetes/cni/net.d
+    HOST_CNI_CONFDIR_PATH: /host/run/multus/cni/net.d
   securityContext:
     privileged: true
   resources: {}
@@ -94,7 +94,7 @@ env:
   ENABLE_MULTI_NIC: "false"
   POD_SECURITY_GROUP_ENFORCING_MODE: "standard"
   HOST_CNI_BIN_PATH: /host/var/lib/cni/bin
-  HOST_CNI_CONFDIR_PATH: /host/etc/kubernetes/cni/net.d
+  HOST_CNI_CONFDIR_PATH: /host/run/multus/cni/net.d
 
 # Add env from configMap or from secrets
 # - name: ENV_VAR1
@@ -118,17 +118,17 @@ extraEnv: []
 extraVolumeMounts:
   - name: cni-bin-dir-rosa
     mountPath: /host/var/lib/cni/bin
-  - name: cni-net-dir-rosa
-    mountPath: /host/etc/kubernetes/cni/net.d
+  - name: multus-cni-dir
+    mountPath: /host/run/multus/cni/net.d
 
 # ROSA/CRI-O host path volumes
 extraVolumes:
   - name: cni-bin-dir-rosa
     hostPath:
       path: /var/lib/cni/bin
-  - name: cni-net-dir-rosa
+  - name: multus-cni-dir
     hostPath:
-      path: /etc/kubernetes/cni/net.d
+      path: /run/multus/cni/net.d
 
 
 # this flag enables you to use the match label that was present in the original daemonset deployed by EKS
