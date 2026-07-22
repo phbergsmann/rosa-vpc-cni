@@ -307,3 +307,7 @@ oc logs -n kube-system -l app.kubernetes.io/name=aws-node --all-containers -f
 | Nodes stuck in `NotReady` | Verify `HOST_CNI_BIN_PATH` / `HOST_CNI_CONFDIR_PATH` and extra volume mounts are set (Step 6) |
 | Pods can't communicate (100% packet loss) | Verify the `ip-forward` tuning config is applied (Step 5) |
 | New node pods can't communicate | Verify the machinepool has the tuning config: `rosa list tuning-configs -c $CLUSTER_NAME` |
+
+## Additional Tests
+
+- [Test OpenShift Virtualization](openshift-virt/README.md) — Install OpenShift Virt, create a VM, verify VPC CNI usage, and test live migration
