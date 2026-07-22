@@ -128,12 +128,13 @@ Generate `values.yaml` from the template and install:
 ```bash
 envsubst < values.template.yaml > values.yaml
 
-git clone --branch init-container-extra-volume-mounts \
-  https://github.com/phbergsmann/amazon-vpc-cni-k8s.git amazon-vpc-cni-k8s
+helm repo add eks https://aws.github.io/eks-charts
+helm repo update
 
 helm install aws-vpc-cni \
   --namespace kube-system \
-  ./amazon-vpc-cni-k8s/charts/aws-vpc-cni \
+  eks/aws-vpc-cni \
+  --version '>= 1.21.2' \
   --values values.yaml
 ```
 
@@ -148,9 +149,7 @@ ROSA uses CRI-O which looks for CNI binaries and configs in different paths than
 | Path Type | EKS Default | ROSA/CRI-O Path |
 |-----------|-------------|------------------|
 | CNI Binaries | `/opt/cni/bin` | `/var/lib/cni/bin` |
-| CNI Config | `/etc/cni/net.d` | `/etc/kubernetes/cni/net.d` |
-
-> **Note**: This requires a Helm chart where `extraVolumeMounts` is also rendered in the init container. See the [chart changes](#chart-changes) section below.
+| CNI Config | `/etc/cni/net.d` | `/run/multus/cni/net.d` |
 
 ## 7. Verify Installation
 
@@ -274,23 +273,12 @@ Unlike EKS, the VPC CNI on ROSA does **NOT** automatically configure:
 | IP Forwarding | Create a tuning config via `rosa` CLI (Step 5) |
 | CNI Paths | Set `HOST_CNI_BIN_PATH` / `HOST_CNI_CONFDIR_PATH` env vars + extra volumes in Helm values (Step 6) |
 
-> **Note**: Source/destination check on ENIs does NOT need to be disabled - tested and verified to work with the default setting.
-
 ## What the VPC CNI Does Handle
 
 When properly configured with IAM permissions, the VPC CNI will:
 - ✅ Manage secondary ENIs for additional pod IPs
 - ✅ Assign/unassign secondary private IPs
 - ✅ Install CNI binaries and config files
-
-## Chart Changes
-
-The upstream `eks/aws-vpc-cni` Helm chart does not render `extraVolumeMounts` in the init container. The [`feature/init-container-extra-volume-mounts`](https://github.com/phbergsmann/amazon-vpc-cni-k8s/tree/feature/init-container-extra-volume-mounts) branch adds this support:
-
-**`templates/daemonset.yaml`**:
-- Init container now also renders `{{ .Values.extraVolumeMounts }}` (previously only the main container did)
-
-This change is backwards-compatible — existing charts that don't set `extraVolumeMounts` are unaffected.
 
 ## Troubleshooting
 
